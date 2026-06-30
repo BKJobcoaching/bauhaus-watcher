@@ -25,10 +25,9 @@ jobs:
       - name: Verfügbarkeit prüfen
         id: check
         env:
-          PRODUCT_URL: ${{ vars.PRODUCT_URL }}
-          PRODUCT_NAME: ${{ vars.PRODUCT_NAME }}
+          PRODUCT_URL: "https://www.bauhaus.info/klimaanlagen/midea-klimasplitgeraet-portasplit/p/31934233"
+          PRODUCT_NAME: "Midea Klimasplitgerät PortaSplit"
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          NTFY_SERVER: ${{ vars.NTFY_SERVER }}
         run: bash check.sh
 
       - name: Zustandsänderung speichern
