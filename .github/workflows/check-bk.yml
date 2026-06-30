@@ -2,7 +2,7 @@ name: braucheklima – alle Baumärkte prüfen
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:
