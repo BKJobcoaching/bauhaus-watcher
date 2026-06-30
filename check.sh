@@ -1,49 +1,28 @@
 #!/usr/bin/env bash
-# Prüft die Bauhaus-Produktseite über eine Scraping-API (Residential-IP + JS-Render),
-# da Bauhaus Rechenzentrums-IPs per CAPTCHA blockt. Bei Verfügbarkeit -> ntfy-Push.
-# State (verfügbar ja/nein) in state.json, damit nur bei der Flanke benachrichtigt wird.
+# Prüft die OBI-Produktseite (direkt, ohne Scraper – OBI blockt keine Cloud-IPs)
+# und schickt bei Online-Bestellbarkeit eine ntfy-Push.
+# "online bestellbar" = JSON-LD availability InStock/PreOrder (NICHT InStoreOnly = nur Markt).
+# state.json merkt sich den Zustand, damit nur bei der Flanke benachrichtigt wird.
 set -euo pipefail
 
 : "${PRODUCT_URL:?PRODUCT_URL fehlt}"
 : "${NTFY_TOPIC:?NTFY_TOPIC fehlt}"
-: "${SCRAPER_API_KEY:?SCRAPER_API_KEY fehlt}"
 NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
-PRODUCT_NAME="${PRODUCT_NAME:-Bauhaus-Artikel}"
-SCRAPER_PROVIDER="${SCRAPER_PROVIDER:-scraperapi}"
+PRODUCT_NAME="${PRODUCT_NAME:-OBI-Artikel}"
 
-# URL-encoden (jq ist auf GitHub-Runnern vorinstalliert)
-ENC=$(jq -rn --arg u "$PRODUCT_URL" '$u|@uri')
+UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-# Abruf-URL je nach Anbieter zusammenbauen (umschaltbar via SCRAPER_PROVIDER)
-case "$SCRAPER_PROVIDER" in
-  scraperapi)
-    # ultra_premium=true: Anti-Bot-Bypass für geschützte Domains (Bauhaus/Cloudflare).
-    # render bewusst AUS – die availability steht im rohen HTML, spart Credits.
-    FETCH="https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=${ENC}&ultra_premium=true&country_code=de" ;;
-  scrapingbee)
-    FETCH="https://app.scrapingbee.com/api/v1/?api_key=${SCRAPER_API_KEY}&url=${ENC}&render_js=true&premium_proxy=true&country_code=de" ;;
-  scrapingant)
-    FETCH="https://api.scrapingant.com/v2/general?url=${ENC}&x-api-key=${SCRAPER_API_KEY}&proxy_country=DE&browser=true" ;;
-  *)
-    echo "::error::Unbekannter SCRAPER_PROVIDER '$SCRAPER_PROVIDER'"; exit 1 ;;
-esac
+# --- Seite laden ---
+http_code=$(curl -sS -o page.html -w '%{http_code}' \
+  -A "$UA" \
+  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+  -H 'Accept-Language: de-DE,de;q=0.9' \
+  "$PRODUCT_URL" || echo "000")
 
-echo "Anbieter: $SCRAPER_PROVIDER"
-
-# --- Seite über die API laden ---
-http_code=$(curl -sS -m 90 -o page.html -w '%{http_code}' "$FETCH" || echo "000")
 echo "HTTP-Status: $http_code  (Seitengröße: $(wc -c < page.html) Bytes)"
 
 if [ "$http_code" != "200" ]; then
-  echo "::warning::API-Abruf nicht erfolgreich (HTTP $http_code). Auszug:"
-  head -c 400 page.html; echo
-  echo "Überspringe diesen Lauf."
-  exit 0
-fi
-
-# CAPTCHA-Seite trotz API? -> dann hat der Abruf nicht funktioniert
-if grep -qiE 'Sicherheitsprüfung ihrer Verbindung|Just a moment|Attention Required' page.html; then
-  echo "::warning::Antwort ist eine CAPTCHA-/Challenge-Seite – Anbieter kam nicht durch. Überspringe."
+  echo "::warning::Abruf nicht erfolgreich (HTTP $http_code). Überspringe diesen Lauf."
   exit 0
 fi
 
@@ -55,13 +34,15 @@ echo "availability roh: ${avail_raw:-<keins gefunden>}"
 echo "preis: ${price:-?} EUR"
 
 if [ -z "$avail_raw" ]; then
-  echo "::warning::Kein availability-Feld gefunden – Seitenstruktur evtl. anders gerendert. Überspringe."
+  echo "::warning::Kein availability-Feld gefunden. Überspringe."
   exit 0
 fi
 
+# online bestellbar = InStock/LimitedAvailability/PreOrder
+# NICHT bestellbar  = OutOfStock, SoldOut, Discontinued, InStoreOnly (nur Markt)
 available=false
-if echo "$avail_raw" | grep -qiE 'InStock|LimitedAvailability|PreOrder|InStoreOnly' \
-   && ! echo "$avail_raw" | grep -qiE 'OutOfStock|SoldOut|Discontinued'; then
+if echo "$avail_raw" | grep -qiE 'InStock|LimitedAvailability|PreOrder' \
+   && ! echo "$avail_raw" | grep -qiE 'OutOfStock|SoldOut|Discontinued|InStoreOnly'; then
   available=true
 fi
 
@@ -72,15 +53,15 @@ if [ -f state.json ]; then
 fi
 echo "Zustand vorher: $prev  →  jetzt: $available"
 
-# --- Push bei Flanke ausverkauft -> verfügbar ---
+# --- Push bei Flanke nicht-bestellbar -> bestellbar ---
 if [ "$available" = "true" ] && [ "$prev" != "true" ]; then
-  echo "🎉 Wieder verfügbar – sende ntfy-Push an Topic '$NTFY_TOPIC'"
+  echo "🎉 Online bestellbar – sende ntfy-Push an Topic '$NTFY_TOPIC'"
   curl -sS \
-    -H "Title: ✅ Wieder bestellbar!" \
+    -H "Title: ✅ Online bestellbar!" \
     -H "Priority: high" \
     -H "Tags: tada,shopping_cart" \
     -H "Click: $PRODUCT_URL" \
-    -d "$PRODUCT_NAME ist bei Bauhaus wieder verfügbar${price:+ ($price €)}. Jetzt zugreifen!" \
+    -d "$PRODUCT_NAME ist bei OBI online bestellbar${price:+ ($price €)}. Jetzt zugreifen!" \
     "$NTFY_SERVER/$NTFY_TOPIC" >/dev/null
   echo "Push gesendet."
 fi
