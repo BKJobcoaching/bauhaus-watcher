@@ -1,27 +1,47 @@
 #!/usr/bin/env bash
-# Prüft die Bauhaus-Produktseite und schickt bei Verfügbarkeit eine ntfy-Push.
-# Aufruf durch GitHub Actions. State (verfügbar ja/nein) liegt in state.json,
-# damit nur bei der Flanke "ausverkauft -> verfügbar" benachrichtigt wird.
+# Prüft die Bauhaus-Produktseite über eine Scraping-API (Residential-IP + JS-Render),
+# da Bauhaus Rechenzentrums-IPs per CAPTCHA blockt. Bei Verfügbarkeit -> ntfy-Push.
+# State (verfügbar ja/nein) in state.json, damit nur bei der Flanke benachrichtigt wird.
 set -euo pipefail
 
 : "${PRODUCT_URL:?PRODUCT_URL fehlt}"
 : "${NTFY_TOPIC:?NTFY_TOPIC fehlt}"
+: "${SCRAPER_API_KEY:?SCRAPER_API_KEY fehlt}"
 NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
 PRODUCT_NAME="${PRODUCT_NAME:-Bauhaus-Artikel}"
+SCRAPER_PROVIDER="${SCRAPER_PROVIDER:-scraperapi}"
 
-UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+# URL-encoden (jq ist auf GitHub-Runnern vorinstalliert)
+ENC=$(jq -rn --arg u "$PRODUCT_URL" '$u|@uri')
 
-# --- Seite laden ---
-http_code=$(curl -sS -o page.html -w '%{http_code}' \
-  -A "$UA" \
-  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
-  -H 'Accept-Language: de-DE,de;q=0.9' \
-  "$PRODUCT_URL" || echo "000")
+# Abruf-URL je nach Anbieter zusammenbauen (umschaltbar via SCRAPER_PROVIDER)
+case "$SCRAPER_PROVIDER" in
+  scraperapi)
+    FETCH="https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=${ENC}&render=true&country_code=de" ;;
+  scrapingbee)
+    FETCH="https://app.scrapingbee.com/api/v1/?api_key=${SCRAPER_API_KEY}&url=${ENC}&render_js=true&premium_proxy=true&country_code=de" ;;
+  scrapingant)
+    FETCH="https://api.scrapingant.com/v2/general?url=${ENC}&x-api-key=${SCRAPER_API_KEY}&proxy_country=DE&browser=true" ;;
+  *)
+    echo "::error::Unbekannter SCRAPER_PROVIDER '$SCRAPER_PROVIDER'"; exit 1 ;;
+esac
 
+echo "Anbieter: $SCRAPER_PROVIDER"
+
+# --- Seite über die API laden ---
+http_code=$(curl -sS -m 90 -o page.html -w '%{http_code}' "$FETCH" || echo "000")
 echo "HTTP-Status: $http_code  (Seitengröße: $(wc -c < page.html) Bytes)"
 
 if [ "$http_code" != "200" ]; then
-  echo "::warning::Abruf nicht erfolgreich (HTTP $http_code) – evtl. Bot-Block. Überspringe diesen Lauf."
+  echo "::warning::API-Abruf nicht erfolgreich (HTTP $http_code). Auszug:"
+  head -c 400 page.html; echo
+  echo "Überspringe diesen Lauf."
+  exit 0
+fi
+
+# CAPTCHA-Seite trotz API? -> dann hat der Abruf nicht funktioniert
+if grep -qiE 'Sicherheitsprüfung ihrer Verbindung|Just a moment|Attention Required' page.html; then
+  echo "::warning::Antwort ist eine CAPTCHA-/Challenge-Seite – Anbieter kam nicht durch. Überspringe."
   exit 0
 fi
 
@@ -32,17 +52,15 @@ price=$(grep -oiE '"price"[[:space:]]*:[[:space:]]*"?[0-9.,]+' page.html | head 
 echo "availability roh: ${avail_raw:-<keins gefunden>}"
 echo "preis: ${price:-?} EUR"
 
+if [ -z "$avail_raw" ]; then
+  echo "::warning::Kein availability-Feld gefunden – Seitenstruktur evtl. anders gerendert. Überspringe."
+  exit 0
+fi
+
 available=false
-if [ -n "$avail_raw" ]; then
-  if echo "$avail_raw" | grep -qiE 'InStock|LimitedAvailability|PreOrder|InStoreOnly' \
-     && ! echo "$avail_raw" | grep -qiE 'OutOfStock|SoldOut|Discontinued'; then
-    available=true
-  fi
-else
-  # Fallback: aktiver Warenkorb-Button ohne "nicht verfügbar"
-  if grep -qiE 'In den Warenkorb' page.html && ! grep -qiE 'nicht verfügbar|ausverkauft|nicht lieferbar' page.html; then
-    available=true
-  fi
+if echo "$avail_raw" | grep -qiE 'InStock|LimitedAvailability|PreOrder|InStoreOnly' \
+   && ! echo "$avail_raw" | grep -qiE 'OutOfStock|SoldOut|Discontinued'; then
+  available=true
 fi
 
 # --- vorherigen Zustand lesen ---
@@ -65,7 +83,7 @@ if [ "$available" = "true" ] && [ "$prev" != "true" ]; then
   echo "Push gesendet."
 fi
 
-# --- State nur bei Änderung schreiben (für Commit-Schritt) ---
+# --- State nur bei Änderung schreiben ---
 if [ "$available" != "$prev" ]; then
   printf '{\n  "available": %s,\n  "lastChange": "%s"\n}\n' "$available" "$(date -u +%FT%TZ)" > state.json
   echo "STATE_CHANGED=true" >> "$GITHUB_OUTPUT"

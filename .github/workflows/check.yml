@@ -2,9 +2,9 @@ name: Bauhaus Verfügbarkeit prüfen
 
 on:
   schedule:
-    # alle 10 Minuten (kleinste zuverlässige GitHub-Granularität ist ~5 Min;
-    # bei *5 läuft es oft nur alle 10-15 Min wegen Last – 10 ist realistisch)
-    - cron: "*/10 * * * *"
+    # alle 30 Minuten – schont das Gratis-Kontingent der Scraping-API.
+    # Bei größerem API-Plan auf "*/10 * * * *" o.ä. ändern.
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}   # manuelles Auslösen über die Actions-Oberfläche (zum Testen)
 
 # erlaubt dem Job, den geänderten state.json zurück ins Repo zu committen
@@ -28,6 +28,9 @@ jobs:
           PRODUCT_URL: "https://www.bauhaus.info/klimaanlagen/midea-klimasplitgeraet-portasplit/p/31934233"
           PRODUCT_NAME: "Midea Klimasplitgerät PortaSplit"
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          # Anbieter umschaltbar: scraperapi (Standard) | scrapingbee | scrapingant
+          SCRAPER_PROVIDER: ${{ vars.SCRAPER_PROVIDER || 'scraperapi' }}
         run: bash check.sh
 
       - name: Zustandsänderung speichern

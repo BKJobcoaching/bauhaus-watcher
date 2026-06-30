@@ -1,82 +1,72 @@
 # Bauhaus Verfügbarkeits-Watcher
 
-Schickt dir eine **Push-Benachrichtigung aufs Handy**, sobald ein bestimmter
-Bauhaus-Artikel wieder bestellbar ist. Läuft komplett kostenlos in **GitHub
-Actions** (kein eigener Server) und pusht über **[ntfy.sh](https://ntfy.sh)**.
+Schickt eine **Push-Benachrichtigung aufs Handy**, sobald ein bestimmter
+Bauhaus-Artikel wieder bestellbar ist. Läuft 24/7 in **GitHub Actions**
+(kein eigener Server) und pusht über **[ntfy.sh](https://ntfy.sh)**.
 
-Beobachtet aktuell: **Midea Klimasplitgerät PortaSplit**
+Beobachtet: **Midea Klimasplitgerät PortaSplit**
 <https://www.bauhaus.info/klimaanlagen/midea-klimasplitgeraet-portasplit/p/31934233>
 
-## So funktioniert's
+## Warum eine Scraping-API?
 
-1. GitHub Actions ruft alle ~10 Min `check.sh` auf.
-2. Das Skript lädt die Produktseite (mit Browser-User-Agent, sonst HTTP 403)
-   und liest das `availability`-Feld aus dem JSON-LD der Seite.
-3. Wechselt der Status von *OutOfStock* → *InStock*, geht **einmalig** eine
-   Push an dein ntfy-Topic. `state.json` merkt sich den Zustand, damit du nicht
-   bei jedem Lauf erneut benachrichtigt wirst.
+Bauhaus blockt Rechenzentrums-IPs (GitHub, Hosting, Proxys) mit einer
+**Cloudflare-CAPTCHA-Prüfung** (HTTP 403). Nur „echte" Privat-/Residential-IPs
+kommen durch. Der Watcher holt die Seite deshalb über eine **Scraping-API**
+(z. B. ScraperAPI) mit Residential-IPs und JS-Rendering.
+
+## Ablauf
+1. GitHub Actions ruft alle 30 Min `check.sh` auf.
+2. `check.sh` lädt die Produktseite über die Scraping-API und liest das
+   `availability`-Feld aus dem JSON-LD.
+3. Wechsel *OutOfStock → InStock* ⇒ **einmalige** ntfy-Push. `state.json`
+   merkt sich den Zustand (kein Spam).
 
 ---
 
-## Einrichtung (einmalig, ~5 Minuten)
+## Einrichtung
 
-### 1. ntfy-App einrichten
-1. App **„ntfy"** installieren (Android/iOS) oder <https://ntfy.sh> im Browser öffnen.
-2. Ein **Topic** abonnieren – wähle einen langen, schwer zu erratenden Namen,
-   z. B. `bauhaus-midea-9f3k2x` (jeder, der den Namen kennt, kann mitlesen/senden).
+### 1. ntfy-App
+- App **„ntfy"** installieren, ein **geheimes Topic** abonnieren
+  (z. B. `bauhaus-midea-bk7k2x9`).
 
-### 2. Repository auf GitHub anlegen
-1. Neues (privates) Repo erstellen, z. B. `bauhaus-watcher`.
-2. Diesen Ordner hochladen / pushen:
-   ```bash
-   git init
-   git add .
-   git commit -m "Bauhaus Watcher"
-   git branch -M main
-   git remote add origin https://github.com/<dein-user>/bauhaus-watcher.git
-   git push -u origin main
-   ```
+### 2. Scraping-API-Key besorgen
+- Bei einem Anbieter kostenlos registrieren und den **API-Key** kopieren:
+  - **ScraperAPI** – <https://www.scraperapi.com> (Standard, `render=true`)
+  - Alternativen: ScrapingBee, ScrapingAnt (per `SCRAPER_PROVIDER` umschaltbar)
 
-### 3. Topic & URL hinterlegen
-Im Repo unter **Settings → Secrets and variables → Actions**:
+### 3. Secrets im Repo eintragen
+**Settings → Secrets and variables → Actions → Tab „Secrets"**, zwei Stück:
 
-**Secret** (Tab „Secrets"):
 | Name | Wert |
 |------|------|
-| `NTFY_TOPIC` | dein Topic-Name, z. B. `bauhaus-midea-9f3k2x` |
+| `NTFY_TOPIC` | dein ntfy-Topic, z. B. `bauhaus-midea-bk7k2x9` |
+| `SCRAPER_API_KEY` | dein API-Key vom Anbieter |
 
-**Variables** (Tab „Variables"):
-| Name | Wert |
-|------|------|
-| `PRODUCT_URL` | `https://www.bauhaus.info/klimaanlagen/midea-klimasplitgeraet-portasplit/p/31934233` |
-| `PRODUCT_NAME` | `Midea Klimasplitgerät PortaSplit` |
-| `NTFY_SERVER` | `https://ntfy.sh` *(nur falls du einen eigenen ntfy-Server nutzt; sonst weglassen)* |
+*(Optional, Tab „Variables": `SCRAPER_PROVIDER` = `scrapingbee` oder
+`scrapingant`, falls du nicht ScraperAPI nutzt.)*
 
 ### 4. Testen
-- Repo → **Actions** → Workflow „Bauhaus Verfügbarkeit prüfen" → **Run workflow**.
-- Im Log siehst du `HTTP-Status: 200` und die erkannte Verfügbarkeit.
-- Push-Test: kurz `state.json` auf `"available": true` setzen ist **nicht** nötig –
-  willst du die ntfy-Zustellung testen, sende einmal manuell:
-  ```bash
-  curl -d "Testnachricht" ntfy.sh/<dein-topic>
-  ```
-
-Fertig. Ab jetzt bekommst du automatisch eine Push, sobald der Artikel
-wieder bestellbar ist.
+- **Actions → „Bauhaus Verfügbarkeit prüfen" → Run workflow**.
+- Erfolgreich, wenn im Log steht: `HTTP-Status: 200` und
+  `availability roh: ...OutOfStock`.
+- ntfy-Zustellung separat testen: `curl -d "Test" ntfy.sh/<dein-topic>`.
 
 ---
 
-## Anderen Artikel beobachten
-Einfach die Variable `PRODUCT_URL` (und `PRODUCT_NAME`) im Repo ändern – kein
-Code-Update nötig. Funktioniert mit jeder Bauhaus-Produktseite, die JSON-LD
-mit `availability` ausliefert (das ist Standard bei Bauhaus).
-
 ## Hinweise / Grenzen
-- **Intervall:** GitHub-Cron ist nicht sekundengenau; `*/10` läuft real meist
-  alle 10–15 Min. Für „so schnell wie möglich" kannst du auf `*/5` stellen,
-  GitHub drosselt aber bei Last.
-- **Bot-Block:** Sollte Bauhaus die GitHub-Server-IPs blocken (HTTP 403),
-  überspringt der Lauf sauber und meldet eine Warning. Bisher kommt der
-  Browser-User-Agent durch.
-- **Datenschutz:** Wähle ein nicht erratbares ntfy-Topic. Wer den Namen kennt,
-  kann Nachrichten an dieses Topic lesen und senden.
+- **Gratis-Kontingente sind klein.** Cloudflare-Bypass kostet pro Abruf mehrere
+  Credits; mit ~1000 Gratis-Credits/Monat ist alle 30 Min realistisch. Bei
+  größerem Plan in `.github/workflows/check.yml` den Cron auf `*/10` stellen.
+- **Falls der Anbieter nicht durchkommt:** Das Log zeigt „CAPTCHA-/Challenge-Seite".
+  Dann Anbieter wechseln (`SCRAPER_PROVIDER`) oder Premium-/Stealth-Proxy des
+  Anbieters aktivieren.
+- **Anderer Artikel:** `PRODUCT_URL`/`PRODUCT_NAME` im Workflow ändern.
+- **Datenschutz:** ntfy-Topic geheim halten – wer den Namen kennt, kann mitlesen.
+
+## Dateien
+| Datei | Zweck |
+|------|------|
+| `check.sh` | Abruf über Scraping-API, Auswertung, ntfy-Push |
+| `.github/workflows/check.yml` | 30-Min-Cron + manueller Testlauf |
+| `state.json` | merkt sich „verfügbar ja/nein" |
+| `ftp-test/bauhaus-iptest.php` | Einmal-Test, ob ein Server durchkommt (nicht im Betrieb nötig) |
