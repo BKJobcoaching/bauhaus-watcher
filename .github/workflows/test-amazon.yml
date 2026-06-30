@@ -1,0 +1,31 @@
+name: TEST Amazon erreichbar (Datacenter)
+
+# Einmal-Test: kommt ein GitHub-Runner (Rechenzentrums-IP) an Amazon vorbei,
+# oder zeigt Amazon eine Roboter-/CAPTCHA-Seite?
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Amazon abrufen
+        run: |
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          URL='https://www.amazon.de/dp/B0GX16LKSC?th=1'
+          code=$(curl -sS -o az.html -w '%{http_code}' -A "$UA" \
+                 -H 'Accept-Language: de-DE,de;q=0.9' \
+                 -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+                 "$URL" || echo 000)
+          size=$(wc -c < az.html)
+          echo "HTTP-Status: $code   (Größe: $size Bytes)"
+          echo "--- Bot-Abwehr-Indikatoren ---"
+          grep -oiE 'Geben Sie die Zeichen|api-services-support@amazon|automatisierte|To discuss automated access|robot|captcha|Tut uns leid' az.html | sort | uniq -c | head
+          echo "--- Verfügbarkeits-Signale ---"
+          grep -oiE 'CurrentlyUnavailable|OutOfStock|InStock|Derzeit nicht verfügbar|In den Einkaufswagen|add-to-cart-button|Auf Lager' az.html | sort | uniq -c | sort -rn | head
+          echo "-------------------------"
+          if [ "$code" = "200" ] && [ "$size" -gt 500000 ] && ! grep -qiE 'Geben Sie die Zeichen|automatisierte|api-services-support@amazon' az.html; then
+            echo "✅ GitHub kommt durch! Echte Produktseite empfangen ($size Bytes)."
+          else
+            echo "❌ Amazon blockt den Runner (CAPTCHA/zu kleine Seite). Dann nur PC-Weg möglich."
+          fi
