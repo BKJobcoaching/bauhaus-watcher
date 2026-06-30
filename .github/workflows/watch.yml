@@ -1,0 +1,48 @@
+name: PortaSplit-Watcher (alle Quellen)
+
+# Ein Lauf prüft alle Quellen nacheinander -> spart Action-Minuten.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: portasplit-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) braucheklima: alle Baumärkte online + Berliner Filialen
+      - name: braucheklima
+        continue-on-error: true
+        run: bash check-bk.sh
+
+      # 2) bestell.bar: 7 Händler online (schema.org JSON-LD) – Redundanz
+      - name: bestell.bar
+        continue-on-error: true
+        run: bash check-bb.sh
+
+      # 3) OBI direkt – unabhängiger Zweitweg
+      - name: OBI direkt
+        continue-on-error: true
+        env:
+          PRODUCT_URL: "https://www.obi.de/p/8620890/midea-mobile-split-klimaanlage-portasplit?preselectedKp=true"
+          PRODUCT_NAME: "Midea Mobile Split-Klimaanlage PortaSplit"
+        run: bash check.sh
+
+      # Geänderte Zustände gemeinsam zurückcommitten
+      - name: Zustände speichern
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json state-bk.txt state-bb.txt
+          git diff --cached --quiet || { git commit -m "state: Verfügbarkeit aktualisiert [skip ci]"; git push; }
