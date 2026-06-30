@@ -1,0 +1,41 @@
+name: Bauhaus Verfügbarkeit prüfen
+
+on:
+  schedule:
+    # alle 10 Minuten (kleinste zuverlässige GitHub-Granularität ist ~5 Min;
+    # bei *5 läuft es oft nur alle 10-15 Min wegen Last – 10 ist realistisch)
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}   # manuelles Auslösen über die Actions-Oberfläche (zum Testen)
+
+# erlaubt dem Job, den geänderten state.json zurück ins Repo zu committen
+permissions:
+  contents: write
+
+# kein paralleler Lauf, damit state.json nicht kollidiert
+concurrency:
+  group: bauhaus-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verfügbarkeit prüfen
+        id: check
+        env:
+          PRODUCT_URL: ${{ vars.PRODUCT_URL }}
+          PRODUCT_NAME: ${{ vars.PRODUCT_NAME }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER: ${{ vars.NTFY_SERVER }}
+        run: bash check.sh
+
+      - name: Zustandsänderung speichern
+        if: steps.check.outputs.STATE_CHANGED == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git commit -m "state: Verfügbarkeit aktualisiert [skip ci]"
+          git push
