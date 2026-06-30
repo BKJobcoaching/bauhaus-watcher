@@ -17,7 +17,9 @@ ENC=$(jq -rn --arg u "$PRODUCT_URL" '$u|@uri')
 # Abruf-URL je nach Anbieter zusammenbauen (umschaltbar via SCRAPER_PROVIDER)
 case "$SCRAPER_PROVIDER" in
   scraperapi)
-    FETCH="https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=${ENC}&render=true&country_code=de" ;;
+    # ultra_premium=true: Anti-Bot-Bypass für geschützte Domains (Bauhaus/Cloudflare).
+    # render bewusst AUS – die availability steht im rohen HTML, spart Credits.
+    FETCH="https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=${ENC}&ultra_premium=true&country_code=de" ;;
   scrapingbee)
     FETCH="https://app.scrapingbee.com/api/v1/?api_key=${SCRAPER_API_KEY}&url=${ENC}&render_js=true&premium_proxy=true&country_code=de" ;;
   scrapingant)
